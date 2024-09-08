@@ -1,0 +1,13 @@
+#Pip module installation:
+build/
+*.egg
+*.egg-info/
+
+#Python evaluation:
+__pycache__/
+local_slope/__pycache__/
+local_slope/local_slope/__pycache__/
+
+# Results and previous versions
+Data_results/
+
