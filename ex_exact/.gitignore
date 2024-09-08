@@ -1,0 +1,31 @@
+#Results and old versions:
+Data_results/
+
+#Python evaluation:
+__pycache__/
+__pycache__
+exact_exchange/__pycache_
+
+#Pip modul installation
+*.egg-info/
+*.egg
+build/_
+
+# Build and Release Folders
+bin-debug/
+bin-release/
+[Oo]bj/
+[Bb]in/
+
+# Other files and folders
+.settings/
+
+# Executables
+*.swf
+*.air
+*.ipa
+*.apk
+
+# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
+# should NOT be excluded as they contain compiler settings and other important
+# information for Eclipse / Flash Builder.

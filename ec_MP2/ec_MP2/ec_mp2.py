@@ -302,7 +302,7 @@ class ec_mp2_cs:
          
         #Initialized printing:
         
-        print('Local slope correlation energy density modelling for a closed-shell system.')
+        print('MP2 correlation energy density modelling for a closed-shell system.')
         
         if self.verbose: #Parameter printing
             print('Evaluation parameters: ')
@@ -684,7 +684,7 @@ class ec_mp2_cs:
             print('-------------------------------------------------------------')
         
     
-    '''Local slope modelled MP2 correlation energy value'''
+    '''MP2 correlation energy value'''
     @property
     def energy(self):
     
@@ -693,7 +693,7 @@ class ec_mp2_cs:
     
         return Ec_value
         
-    '''Local slope modelled MP2 correlation energy density evaluated on the grid'''
+    '''MP2 correlation energy density evaluated on the grid'''
     @property    
     def array(self):
         '''ec(r)=1/rho(r) * ec^{MP2}(r)'''
@@ -707,18 +707,7 @@ class ec_mp2_cs:
         ec = self.ec / rho 
         return ec           
     
-    '''Local slope derived from the MP2 correlation energy density'''
-    @property
-    def w0_slope(self):
-        
-        #Extracting necessary components:
-        ao_value = numint.eval_ao(self.mol, self.coords, deriv=1) #Atomic orbitals evaluated on the grid   
-        # Evaluate electron density on same grid from atomic orbitals
-        rho = numint.eval_rho(self.mol, ao_value[0], self.dm, xctype='LDA')
-        
-        w_0 = 2*self.ec / rho #w_0=1 / rho * 2 * formula
-        
-        return w_0
+
 
 ### Opposite spin based MP2 correlation energy density ###
 '''       
@@ -766,7 +755,7 @@ class ec_mp2_os:
         >>>mf.kernel()
         >>>args = ec_mp2_args(mf,mol,Abasis)
         >>>Ec_os=ec_mp2_os(*args, *kwargs)
-        >>>print('Local slope based opposite spin correlation energy: %s' % Ec_os.energy)
+        >>>print('os MP2 correlation energy: %s' % Ec_os.energy)
         '''
 
     def __init__(self,dm,mol,Amol,mo_coeff,mo_occ,mo_energies,coords,weights,
@@ -1335,7 +1324,7 @@ class ec_mp2_os:
             print('-------------------------------------------------------------')
         
       
-    '''Local slope modelled MP2 correlation energy value'''
+    '''MP2 correlation energy value'''
     @property
     def energy(self):
     
@@ -1344,7 +1333,7 @@ class ec_mp2_os:
     
         return Ec_value
         
-    '''Local slope modelled MP2 correlation energy density evaluated on the grid'''
+    '''MP2 correlation energy density evaluated on the grid'''
     @property    
     def array(self):
         '''ec(r)=1/rho(r) * ec^{MP2}(r)'''
@@ -1358,18 +1347,7 @@ class ec_mp2_os:
         ec = self.ec / rho 
         return ec           
     
-    '''Local slope derived from the MP2 correlation energy density'''
-    @property
-    def w0_slope(self):
-        
-        #Extracting necessary components:
-        ao_value = numint.eval_ao(self.mol, self.coords, deriv=1) #Atomic orbitals evaluated on the grid   
-        # Evaluate electron density on same grid from atomic orbitals
-        rho = numint.eval_rho(self.mol, ao_value[0], self.dm, xctype='LDA')
-        
-        w_0 = 2*self.ec / rho #w_0=1 / rho * 2 * formula
-        
-        return w_0
+
 
 #============================================#
 #       Additional python functions          #
