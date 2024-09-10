@@ -1,6 +1,8 @@
 # MP2 Correlation Energy Density Generator
 This is the project repository for the evaluation of the MP2 correlation energy density. It contains functionalities to obtain the MP2 correlation energy and energy density function. 
 
+Version 0.4 (31/05/2024)
+
 # Quickstart
 - The repository can be cloned to the local directory using the *git clone* command. 
 

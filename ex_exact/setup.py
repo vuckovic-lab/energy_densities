@@ -1,7 +1,4 @@
-'''Setup to install the exact exchange package via pip
-
-Version: 23.11.23
-Author: Elias Polak'''
+'''Setup to install the exact exchange package via pip'''
 
 from setuptools import setup, find_packages
 import subprocess
@@ -20,7 +17,7 @@ setup(
     url=URL,
     author=AUTHOR,
     author_email=AUTHOR_EMAIL,
-    version="1.0", 
+    version="0.1", 
     
     packages=find_packages(exclude=['*Examples*', '*test*','*Data_results*']), #Packages only 
     install_requires=[

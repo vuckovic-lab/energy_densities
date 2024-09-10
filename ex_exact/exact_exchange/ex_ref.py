@@ -1,8 +1,4 @@
-'''Functionalities to evaluate the reference exchange energy from a scf calculation
-
-Version: 24.11.2023
-Author: Elias Polak
-'''
+'''Functionalities to evaluate the reference exchange energy from a scf calculation'''
 
 import opt_einsum as oe
 import numpy as np 

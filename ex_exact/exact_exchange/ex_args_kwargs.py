@@ -1,8 +1,5 @@
 '''Python scripts to extract and collect fixed and optional
-arguments for the exact exchange based energy density evaluation 
-
-Author: Elias Polak
-Version: 24.11.2023'''
+arguments for the exact exchange based energy density evaluation '''
 
 
 from pyscf import dft, scf, df

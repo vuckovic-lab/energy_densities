@@ -18,10 +18,7 @@ ij      - occupied molecular orbitals
 ab      - virtual molecular orbitals
 klmn    - atomic orbitals
 p       - grid points
-
-
-Author: Elias Polak
-Version: 24.11.2023'''
+'''
 
 import os
 import sys

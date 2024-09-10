@@ -1,7 +1,4 @@
-''' Script to obtain PySCF based reference MP2 correlation energy.
-
-Author: Elias Polak
-Version: 15.11.2023'''
+''' Script to obtain PySCF based reference MP2 correlation energy.'''
 
 from pyscf import mp
 from pyscf.data import elements

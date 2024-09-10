@@ -24,10 +24,7 @@ t       - auxiliary orbitals
 p       - grid points
 T_ijab  - Partial MP2 doubles amplitudes 
 V_ijabp - orbital tensor integrals     
-
-
-Author: Elias Polak
-Version: 08.01.2024'''
+'''
 
 import numpy as np 
 import jax.numpy as jnp

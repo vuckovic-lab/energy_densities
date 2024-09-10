@@ -1,8 +1,5 @@
 '''Python scripts to extract and collect fixed and optional arguments for the 
-correlation energy density evaluation.
-
-Author: Elias Polak
-Version: 15.11.2023'''
+correlation energy density evaluation.'''
 
 
 from pyscf import dft, scf, df

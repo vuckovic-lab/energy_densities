@@ -1,6 +1,8 @@
 # exact_exchange
 Project repository for the evaluation of the exact exchange -- Functionalities to obtain the exact exchange based exchange energy and energy density function. 
 
+Version 0.1 (24.11.2023)
+
 
 - Exact exchange is taken from:
     > [S. Vuckovic, T. J. P. Irons, A. Savin, A. M. Teale, and P. Gori-Giorgi, “Exchange-Correlation Functionals via Local Interpolation along the Adiabatic Connection”, Journal of Chemical Theory and Computation 12, 2598-2610 (2016)](https://pubs.acs.org/doi/10.1021/acs.jctc.6b00177).

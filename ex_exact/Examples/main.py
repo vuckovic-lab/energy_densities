@@ -1,7 +1,4 @@
-''' Test script for the exact exchange energy evaluation
-    
-    Author: Elias Polak
-    Version: 24.11.2023'''
+''' Test script for the exact exchange energy evaluation'''
 
 
 #Importing pyscf modules
