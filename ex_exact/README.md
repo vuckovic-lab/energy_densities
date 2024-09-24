@@ -7,23 +7,27 @@ Version 0.1 (24.11.2023)
 - Exact exchange is taken from:
     > [S. Vuckovic, T. J. P. Irons, A. Savin, A. M. Teale, and P. Gori-Giorgi, “Exchange-Correlation Functionals via Local Interpolation along the Adiabatic Connection”, Journal of Chemical Theory and Computation 12, 2598-2610 (2016)](https://pubs.acs.org/doi/10.1021/acs.jctc.6b00177).
 
-# Startup
-The following is a quick tutorial on how to get going with git, download the latest repository and install the functionalities.
+# Quickstart
+- The repository can be cloned to the local directory using the *git clone* command. 
 
-1. Clone the latest version on the github repository:
+       git clone https://github.com/vuckovic-lab/energy_densities 
 
-        git clone https://github.com/vuckovic-lab/exact_exchange.git
+- Installation is possible with the *pip* command.
 
+       pip install .
 
-The installation via pip will add the functionalities to the global python path. Without installation they have to be added manually. 
+- The functions are directly called from the python files:
 
-2. Go to the downloaded github repository with the functionalities:
+        from ex_exact.ex_args_kwargs import ex_args, ex_kwargs
+        from ex_exact.ex_ref import ex_ref_eval
+        from ex_exact.ex_funcs import ex_eval
 
-        cd exact_exchange/
+- The available functions are
 
-3. Install the local **exact_exchange** package via pip:
-
-        pip install .
+        ex_args()     #Extraction of necessary arguments 
+        ex_kwargs()   #Extraction of optional arguments 
+        ex_ref_eval() #Calculation of the PySCF HF exchange energy
+        ex_eval()      #Exact exchange energy density generator
 
 ## Requirements:
 
@@ -44,8 +48,8 @@ The python functionalities are employed with the import command (see the content
 # Content 
 The repository contains the main python functionalities for the exact exchange evaluation along with some examples for illustration and for testing. 
 
-## exact_exchange functions
-Available python functions for the local slope evaluation: 
+## ex_exact functions
+Available python functions for the evaluation: 
 
 - **ex_args** 
 
@@ -79,7 +83,7 @@ Available python functions for the local slope evaluation:
 
 - **ex_ref_eval** 
         
-    Exact evaluation of the exchange energy directly from the density matrix.
+    Exact evaluation of the exchange energy in PySCF.
     
         Input: 
         mf  : Kernel of a RKS/RHF-Calculation
@@ -123,5 +127,4 @@ Author: [Elias-Py09](https://github.com/Elias-Py09)
 
 Group-Homepage: [Vuckovic group](https://www.unifr.ch/chem/en/research/groups/vuckovic-group/)
 
-
-
+Version: 24.09.2024
