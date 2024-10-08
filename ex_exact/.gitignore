@@ -1,6 +1,3 @@
-#Results and old versions:
-Data_results/
-
 #Python evaluation:
 __pycache__/
 __pycache__
@@ -9,7 +6,7 @@ exact_exchange/__pycache_
 #Pip modul installation
 *.egg-info/
 *.egg
-build/_
+build/
 
 # Build and Release Folders
 bin-debug/
@@ -29,3 +26,4 @@ bin-release/
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important
 # information for Eclipse / Flash Builder.
+#

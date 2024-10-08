@@ -5,9 +5,5 @@ build/
 
 #Python evaluation:
 __pycache__/
-local_slope/__pycache__/
-local_slope/local_slope/__pycache__/
-
-# Results and previous versions
-Data_results/
-
+ec_MP2/__pycache__/
+ec_MP2/ec_MP2/__pycache__/

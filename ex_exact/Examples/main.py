@@ -7,7 +7,7 @@ from pyscf.dft import numint
 
 #Importing packages
 import numpy as np
-import exact_exchange as ex
+import ex_exact as ex
 
 DF=False           #Density fitting argument
 verbose=True       #Additional printing of computation steps and time results

@@ -1,7 +1,6 @@
 '''Setup to install the local slope package via pip'''
 
 from setuptools import setup, find_packages
-import subprocess
 
 
 NAME            = 'ec_MP2'
@@ -19,7 +18,7 @@ setup(
     author_email=AUTHOR_EMAIL,
     version="0.4", 
     
-    packages=find_packages(exclude=['*Examples*', '*test*','*Data_results*','*build*','*local_slope.egg-info*']), #Exclude directories
+    packages=find_packages(exclude=['*Examples*','*build*','*ec_MP2.egg-info*']), #Exclude directories
     install_requires=[
         # List your package dependencies here
         # e.g., 'requests >= 2.22.0'

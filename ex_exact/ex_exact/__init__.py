@@ -18,9 +18,9 @@ Available functions:
 
 
 #Importing all relevant functions for the evaluation
-from exact_exchange.ex_ref import ex_ref_eval
-from exact_exchange.ex_args_kwargs import ex_args, ex_kwargs
-from exact_exchange.ex_funcs import ex_eval
+from ex_exact.ex_args_kwargs import ex_args, ex_kwargs
+from ex_exact.ex_funcs import ex_eval
+from ex_exact.ex_ref import ex_ref_eval
 
 
 

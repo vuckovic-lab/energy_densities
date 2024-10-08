@@ -1,11 +1,10 @@
 '''Setup to install the exact exchange package via pip'''
 
 from setuptools import setup, find_packages
-import subprocess
 
 
-NAME            = 'exact_exchange'
-DESCRIPTION     = 'Functionalities for the evaluation of the local slope based MP2 correlation energy density'
+NAME            = 'ex_exact'
+DESCRIPTION     = 'Functionalities for the evaluation of the exact exchange energy density'
 URL             = 'https://github.com/vuckovic-lab/energy_densities.git'
 AUTHOR          = 'Elias Polak' 
 AUTHOR_EMAIL    = 'elias_93@hotmail.de'
@@ -19,7 +18,7 @@ setup(
     author_email=AUTHOR_EMAIL,
     version="0.1", 
     
-    packages=find_packages(exclude=['*Examples*', '*test*','*Data_results*']), #Packages only 
+    packages=find_packages(exclude=['*Examples*','*build*','*ec_MP2.egg-info*']), #Packages only 
     install_requires=[
         # List your package dependencies here
         # e.g., 'requests >= 2.22.0'
