@@ -14,5 +14,4 @@ Version: 08.10.2024
 If you use this code in your research or for other purposes, please cite this repository or the following publication:
 
 **Real-space machine learning of correlation density functionals**  
-Elias Polak, Heng Zhao, Stefan Vuckovic  
-[ChemRxiv](https://chemrxiv.org/engage/chemrxiv/article-details/66e75a1b12ff75c3a16e9d00), 2024.
+[E. Polak, H. Zhao, S. Vuckovic, "Real-space machine learning of correlation density functionals", ChemRxiv (2024)](https://doi.org/10.26434/chemrxiv-2024-zk6hp-v4) *(submitted to Nature Communications)*.
