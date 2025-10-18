@@ -17,10 +17,8 @@ setup(
     author=AUTHOR,
     author_email=AUTHOR_EMAIL, 
     
-    packages=find_packages(exclude=['*Examples*','*build*','*ec_MP2.egg-info*']), #Exclude directories
+    packages=find_packages(exclude=['*Examples*','*ec_MP2.egg-info*']), 
     install_requires=[
-        # List your package dependencies here
-        # e.g., 'requests >= 2.22.0'
         'build >= 1.0.3',
         'twine >= 4.0.2',
         'setuptools >= 68.0.0',
