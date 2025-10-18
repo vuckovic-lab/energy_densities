@@ -33,9 +33,6 @@ import os
 import sys
 import opt_einsum as oe
 import functools
-import gc
-import threading
-lock = threading.Lock()
 
 from pyscf import df, gto, ao2mo, lib
 from pyscf.dft import numint
@@ -72,36 +69,25 @@ class ec_mp2_cs:
         
         Example:
 
-        >>>batch_size=0 
-        >>>verbose=False/True 
-        >>>DF=True/False 
-        >>>optimal_contract=True
-        >>>max_num_array=5000
-        >>>frozen_core=False
-        >>>spinorb=False
-        >>>num_core='auto'  
-        >>>kappa='inf'
-        >>>kwargs = ec_mp2_kwargs(batch_size,DF,verbose,optimal_contract,max_num_array,frozen_core,
-                    spinorb,num_core,kappa)
-        >>>atom_geom = 'He 0 0 0'
-        >>>basis = 'def2-tzvp'
-        >>>Abasis = 'def2tzvpri' #aux basis for MP2 correlation energy
-        >>>mol = gto.M(atom=atom_geom, basis=basis)
-        >>>mf = dft.RKS(mol) 
-        >>>mf.xc = 'hf'  
-        >>>mf.kernel()
-        >>>args = ec_mp2_args(mf,mol,Abasis)
-        >>>Ec=ec_mp2_cs(*args, *kwargs)
-        >>>print('MP2 correlation energy: %s' % Ec.energy)
+        Example:
+        >>> kwargs = ec_mp2_kwargs()
+        >>> atom_geom = 'He 0 0 0'
+        >>> basis = 'def2-tzvp'
+        >>> Abasis = 'def2tzvpri' 
+        >>> mol = gto.M(atom=atom_geom, basis=basis)
+        >>> mf = dft.RKS(mol) 
+        >>> mf.xc = 'hf'  
+        >>> mf.kernel()
+        >>> args = ec_mp2_args(mf,mol,Abasis)
+        >>> Ec=ec_mp2_cs(*args, *kwargs)
+        >>> print('MP2 correlation energy: %s' % Ec.energy)
         '''
 
     def __init__(self,dm,mol,Amol,mo_coeff,mo_occ,mo_energies,coords,weights,
-                 batch_size=0,DF=True,verbose=False, optimal_contract=False, max_num_array=None,
-                 frozen_core=False,spinorb=False,num_core='auto',kappa='inf'):
+                 batch_size=0, kappa='inf', optimal_contract=0, frozen_core=0, verbose=False):
         '''
-        
         *args* 
-        dm          : Density matrix from a scf calculation (#basis,#basis)
+        dm          : Density matrix from an closed-shell scf calculation (#basis,#basis)
         mol         : gto molecular structure incorporating the basis set
         Amol        : PySCF Mol, with aux. basis, e.g., Amol = df.addons.make_auxmol(mol, Abasis)
         mo_coeff    : Coefficient matrix of the atomic orbitals (#basis,#basis)
@@ -111,15 +97,14 @@ class ec_mp2_cs:
         weights     : Grid weights (#coords,1)
         
         **kwargs
-        batch_size = 0           : Grid batch size to run the evaluation on, 0 is for no parallelization
-        DF = True                : Density fitting option
-        verbose = False          : Additional printings of time and memory statements
-        optimal_contract = False : Optimized contraction algorithm for the opt_einsum summation path
-        max_num_array = None     : Maximum number of elements in a temporary array for the optimal contraction path, requires a postive integer.
-        frozen_core = False      : Frozen core orbital option
-        spinorb = False          : Specification of the spin orbital usage of frozen core orbitals, False for R/U is fine
-        num_core = 'auto'        : Amount of frozen orbitals, 'auto' selects the core ones.
-        kappa = 'inf'            : Laplace transform regularization parameter for the doubles amplitudes, 'inf' for no regularization (original MP2 expression)
+        batch_size = 0          : Batch size to run the evaluation on, 0 is for no parallelization
+        kappa = 'inf'           : Laplace transform regularization parameter for the doubles amplitudes
+                                  ('inf' for no regularization, else positive integer).
+        optimal_contract = 0    : Optimized contraction algorithm option (0 by default, else positive integer
+                                  representing number of elements in temporary array for the optimal contraction path).
+        frozen_core = 0         : Frozen core orbital option (0 by default, 'auto' selects core orbitals
+                                  automatically, else positive integer below number of orbitals).
+        verbose = False         : Additional printings of time and memory statements
         '''
         
         #Saving arguments of the class
@@ -132,29 +117,35 @@ class ec_mp2_cs:
         self.coords             = coords
         self.weights            = weights
         self.batch_size         = batch_size
-        self.DF                 = DF
         self.verbose            = verbose
         self.optimal_contract   = optimal_contract
         self.frozen_core        = frozen_core
         self.kappa              = kappa
         
+        #Extracting the number of virtual and occupied orbitals
+        self.Nocc, self.Nvirt  = orb_occ_virt(self.mo_occ)    
+        
+        #========================================#
         #Checking input...
-        if self.optimal_contract: #Einsum contraction option
-            self.max_num_array   = max_num_array
-            #Check value of memory limit:
-            if isinstance(self.max_num_array,int)==False or self.max_num_array < 0 or self.max_num_array ==0:
-                print('Memory limit for optimal contraction has to be a positive integer in MB')
-                sys.exit()()
+        if self.Amol is None or isinstance(self.Amol,gto.mole.Mole): #DF option
+            pass
+        else:
+            print('Amol needs to be a string name for the corresponding auxilliary basis set or "None" for no density fitting.')
+            sys.exit()()
         
         if isinstance(self.batch_size,int)==False or self.batch_size <0:  #Batch size option
-            print('batch_size argument hast to be a positive integer or 0 for no parallelization')
+            print('batch_size argument hast to be a positive integer or 0 for no parallelization.')
             sys.exit()()    
         
-        if isinstance(num_core,int)==False or num_core < 0: #Number of core orbitals
-            if num_core == 'auto':
+        if self.optimal_contract < 0 or isinstance(self.optimal_contract,int)==False: #Optimal contraction size
+            print('optimal_contract argument has to be a positive integer or 0 for no optimal contraction.')
+            sys.exit()
+        
+        if isinstance(self.frozen_core,int)==False or self.frozen_core < 0: #Number of frozen core orbitals
+            if self.frozen_core == 'auto':
                 pass
             else:
-                print('''Number of core orbitals must be a positive integer or 'auto' for automatic assignement''')
+                print('''Number of frozen core orbitals must be a positive integer, 'auto' for automatic assignement or 0 for no frozen core approximation.''')
                 sys.exit()()
        
         if isinstance(self.kappa, (int,float))==False or self.kappa < 0: #Kappa regularization 
@@ -162,41 +153,26 @@ class ec_mp2_cs:
                 pass
             else:           
                 print('''The regularization paramater kappa has to be a positive real number, 0 or 'inf'.''')
-                sys.exit()()   
-                
+                sys.exit()()  
 
         #========================================#
         # Extra Functions for T_ijab and V_ijabp 
         
         #Two-body integrals of occupied and virtual molecular orbitals
-        def two_body_integrals(mo_coeff,mo_occ,mol,frozen_core,num_core):
+        def two_body_integrals(mo_coeff,mol):
             '''Two-body integral computation of occupied and virtual molecular orbital functions: <ij|ab>.
             
             Input:
             mo_coeff          : Coefficient matrix of the atomic orbitals (#basis,#basis)
-            mo_occ            : Molecular orbital occupation numbers (#basis,)
             mol               : gto molecular geometry
-            frozen_core       : Frozen core orbital option
-            num_core          : Amount of frozen orbitals, 'auto' selects the core ones.
             
             Output: 
-            two_integral_eval        : Two integral value depending on the molecular orbital function index
+            two_integral_eval : Two integral value depending on the molecular orbital function index
             (#occ_basis,#occ_basis,#virt_basis,#virt_basis)'''    
             
-            #Extracting the number of total and occupied orbitals
-            Nocc, Nvirt  = orb_occ_virt(mo_occ)
-                
-            #Check for frozen core orbital option
-            if frozen_core:
-                #iajb integrals (iofree):
-                two_integral_eval_0 = ao2mo.outcore.general_iofree(mol, (mo_coeff[:,num_core:Nocc], mo_coeff[:,Nocc:],
-            mo_coeff[:,num_core:Nocc],mo_coeff[:,Nocc:]),compact=False).reshape(Nocc-num_core,Nvirt,Nocc-num_core,Nvirt)
-            
-            else:
-                #iajb integrals (iofree):
-                two_integral_eval_0 = ao2mo.outcore.general_iofree(mol, (mo_coeff[:,:Nocc], mo_coeff[:,Nocc:],
-            mo_coeff[:,:Nocc],mo_coeff[:,Nocc:]),compact=False).reshape(Nocc,Nvirt,Nocc,Nvirt)
-            
+            #iajb integrals (iofree):
+            two_integral_eval_0 = ao2mo.outcore.general_iofree(mol, (mo_coeff[:,self.frozen_core:self.Nocc], mo_coeff[:,self.Nocc:],
+            mo_coeff[:,self.frozen_core:self.Nocc],mo_coeff[:,self.Nocc:]),compact=False).reshape(self.Nocc-self.frozen_core,self.Nvirt,self.Nocc-self.frozen_core,self.Nvirt)
             
             #ijab integrals:    
             two_integral_eval = two_integral_eval_0.transpose((0,2,1,3));
@@ -204,7 +180,7 @@ class ec_mp2_cs:
             return two_integral_eval 
 
         #Partial MP2 doubles amplitude T_ijab
-        def part_mp2_amplitude(mol,mo_coeff, mo_energies,mo_occ,frozen_core,num_core, kappa):
+        def part_mp2_amplitude(mol,mo_coeff, mo_energies,mo_occ,kappa):
             '''Evaluation of the partial MP2 doubles amplitude:
             
             T_{ijab}=(<ij|ab>)/(eps_a+eps_b-eps_i-eps_j)
@@ -214,8 +190,6 @@ class ec_mp2_cs:
             mo_coeff      : Coefficient matrix of the atomic orbitals (#basis,#basis)
             mo_energies   : Orbital energies (#basis,)
             mo_occ        : Occupation numbers (#basis,)
-            frozen_core   : Frozen core orbital option
-            num_core      : Amount of frozen orbitals, 'auto' selects the core ones.
             kappa = 'inf' : Laplace transform regularization parameter for the doubles amplitudes,
                             'inf' for no regularization (original MP2 expression)
             
@@ -227,30 +201,22 @@ class ec_mp2_cs:
             orbs_energies_occ  = mo_energies[mo_occ > 0] #Energies of occupied orbitals
             orbs_energies_virt = mo_energies[mo_occ ==0] #Energies of virtual orbitals
             
-            #Extracting the number of total and occupied orbitals
-            Nocc, Nvirt  = orb_occ_virt(mo_occ)
-            UC = Nvirt
-            
-            #Checking for frozen core orbital option
-            if frozen_core:
-                OC = Nocc-num_core #Updated number of occupied orbitals
-                orbs_energies_occ = orbs_energies_occ[num_core:] #Updated list of orbital energies
-                
-            else:
-                OC = Nocc
+            #Updating number and energies of occupied orbitals
+            OC = self.Nocc-self.frozen_core 
+            orbs_energies_occ = orbs_energies_occ[self.frozen_core:]  
 
             #Denominator of orbital energies:
-            Eps=np.zeros([OC,OC,UC,UC])
+            Eps=np.zeros([OC,OC,self.Nvirt,self.Nvirt])
             
             for i in np.arange(OC):
                 for j in np.arange(OC):
-                    for a in np.arange(UC):
-                        for b in np.arange(UC):
+                    for a in np.arange(self.Nvirt):
+                        for b in np.arange(self.Nvirt):
                             Eps[i,j,a,b] = orbs_energies_virt[a] + orbs_energies_virt[b] - orbs_energies_occ[i] - orbs_energies_occ[j]
             
             
             #Evaluate two body integrals
-            T_ijab = two_body_integrals(mo_coeff,mo_occ,mol,frozen_core,num_core)
+            T_ijab = two_body_integrals(mo_coeff,mol)
             
             #Final partial MP2 doubles amplitude
             if kappa == 'inf':
@@ -261,15 +227,13 @@ class ec_mp2_cs:
             return T_eval
 
         #Evaluation of virtual and occupied orbital functions
-        def occ_virt_basis(mol, coords, mo_coeff,frozen_core,num_core):
+        def occ_virt_basis(mol, coords, mo_coeff):
             '''Extracting orbital functions from the atomic orbitals (basis set) and molecular orbital coefficients
             
             Input:
             mol         : gto molecular structure incorporating the basis set
             coords      : Grid coordinates (#coords,3)
             mo_coeff    : Coefficient matrix of the atomic orbitals (#basis,#basis)
-            frozen_core : Option to use frozen core orbitals within the evaluation
-            num_core    : Number of frozen core orbitals. 
             
             Output:
             mol_orb_occ  : Occupied molecular orbital functions evaluated on the grid (#occ-basis, #coords)
@@ -282,49 +246,39 @@ class ec_mp2_cs:
             mol_orb = np.einsum('ji,pj->ip',mo_coeff,ao_value[0])        #   (#basis, #coords)
             
             #Check for frozen core orbital option
-            if frozen_core:
-                mol_orb_occ = mol_orb[num_core:Nocc,:]                  #   (#occ_basis-#core_orb, #coords)
-            else:
-                mol_orb_occ = mol_orb[:Nocc,:]                          #   (#occ_basis, #coords)
+            mol_orb_occ = mol_orb[self.frozen_core:self.Nocc,:]               #   (#occ_basis-#core_orb, #coords)
                 
             #Extracting virtual orbitals
-            mol_orb_virt = mol_orb[Nocc:,:]                              #   (#vir-basis, #coords)
+            mol_orb_virt = mol_orb[self.Nocc:,:]                              #   (#vir-basis, #coords)
          
             return mol_orb_occ, mol_orb_virt
         
         #=======================================#
-        
-        #Extracting the number of virtual and occupied orbitals
-        Nocc, Nvirt  = orb_occ_virt(self.mo_occ)     
-         
         #Initialized printing:
         
-        print('MP2 correlation energy density modelling for a closed-shell system.')
+        print('---------------------------------------------------------------')
+        print('  Closed-shell (cs) MP2 correlation energy density evaluation  ')
+        print('---------------------------------------------------------------')
         
         if self.verbose: #Parameter printing
             print('Evaluation parameters: ')
             print('Batch wise parallelization = ' + str(self.batch_size > 0))
-            print('Density fitting = ' + str(self.DF))
-            print('Optimized einsum path = ' + str(self.optimal_contract))
+            print('Density fitting = ' + str(isinstance(self.Amol,gto.mole.Mole)))
+            print('Optimized einsum path = ' + str(self.optimal_contract > 0))
             print('Frozen core orbitals = ' + str(self.frozen_core))
             print('Initialising evaluation of the necessary components.')
-            print(f'Number of occupied molecular orbitals is {Nocc}.')
-            print(f'Number of virtual molecular orbitals is {Nvirt}.')
-            self.contract_size      = [] #Preallocating contraction memory usage
+            print(f'Number of occupied molecular orbitals is {self.Nocc}.')
+            print(f'Number of virtual molecular orbitals is {self.Nvirt}.')
+            self.contract_size = [] #Preallocate largest memory usage of contraction
                
         #Freezing the core orbitals
-        if self.frozen_core:
-            if num_core == 'auto': #Automatic frozen core orbitals
-                self.num_core = num_core_orb(self.mol,spinorb)
-            else: #Manually chosen frozen core orbitals
-                self.num_core = num_core
-            if self.verbose:
-                print()
-                print('The number of frozen core orbitals for the evaluation is %s out of %s occupied orbitals' % (self.num_core,Nocc))
-        else: #No frozen core orbitals
-            self.num_core = 0     
-        
-        
+        if self.frozen_core=='auto': #Automatic choice of frozen core orbitals
+            self.frozen_core = int(num_core_orb(self.mol))
+        if self.verbose:
+            print()
+            print('The first %s out of %s occupied orbitals are set frozen'
+                  % (self.frozen_core,self.Nocc))
+    
         #Starting evaluation
         #====================#
         if self.verbose: #Initial printing
@@ -336,21 +290,24 @@ class ec_mp2_cs:
         
         # Partial MP2 doubles amplitude T_ijab (#occ_basis,#occ_basis,#virt_basis,#virt_basis)
         T = part_mp2_amplitude(self.mol,self.mo_coeff, self.mo_energies,
-                               self.mo_occ,self.frozen_core,self.num_core,self.kappa)
+                               self.mo_occ,self.kappa)
         if self.verbose: #Saving size of T_ijab
             self.T_size = (T.size * T.itemsize) / (1024**3)  #in GB
             print('Memory usage of T_ijab:')
             print(f'{self.T_size:.8f} GB')
-            print()
                     
         #Extraction of atomic orbital coefficients 
-        if self.frozen_core:
-            C_occ  = self.mo_coeff[:,self.num_core:Nocc] #Occupied orbitals (#basis, #occ_basis-#core_orb)
-        else:
-            C_occ  = self.mo_coeff[:,:Nocc]         #Occupied orbitals (#basis, #occ_basis)                
+        C_occ  = self.mo_coeff[:,self.frozen_core:self.Nocc] #Occupied orbitals (#basis, #occ_basis-#core_orb)
+        C_virt = self.mo_coeff[:,self.Nocc:]                 #Virtual orbitals (#basis, #virt-basis)
         
-        C_virt = self.mo_coeff[:,Nocc:]             #Virtual orbitals (#basis, #virt-basis)
-        
+        if self.verbose: #Saving size of orbital coefficients
+            self.C_occ_size = C_occ.size * C_occ.itemsize / (1024**3) #in GB
+            print(f'Memory usage of C_occ {self.C_occ_size:.8f} GB')
+            self.C_virt_size = C_virt.size * C_virt.itemsize / (1024**3) #in GB
+            print(f'Memory usage of C_virt {self.C_virt_size:.8f} GB')
+            self.mo_coeff_size = self.mo_coeff.size * self.mo_coeff.itemsize / (1024**3) #in GB
+            print(f'Memory usage of mo_coeff {self.mo_coeff_size:.8f} GB')
+            print()
         
         #Batch seperation options:    
         if self.batch_size==0: #No parallelization 
@@ -381,7 +338,7 @@ class ec_mp2_cs:
         
        
         #Check for density fitting option
-        if DF:  #Density fitting
+        if self.Amol is not None:  #Density fitting
             ''' Further expansion of V with a density fitted auxiliary basis set:
 
             A_{mnp}  = sum_{t}Q_{tmn}int psi_t(r')/(r_p-r')dr'
@@ -413,7 +370,7 @@ class ec_mp2_cs:
                 return I      
             
             #Function to evaluate of the correlation energy density array with DF
-            def ec_density_eval_DF(T, mol, mo_coeff,C_occ,C_virt, df_coeff, Amol, frozen_core, num_core, coords):
+            def ec_density_eval_DF(T, mol, mo_coeff,C_occ,C_virt, df_coeff, Amol, coords):
                 '''Correlation energy density evaluation from the closed-shell formula 
                 using T_ijab and V_ijab in the DF expansion:
                 
@@ -430,15 +387,13 @@ class ec_mp2_cs:
                 C_virt       : Atomic orbital coefficients of virtual molecular orbitals (#basis,#virt_basis)
                 df_coeff     : coefficient matrix from density fitting (#aux-basis,#basis,#basis)
                 Amol         : PySCF Mol, with aux. basis, e.g., Amol = df.addons.make_auxmol(mol, Abasis)
-                frozen_core  : Option to use frozen core orbitals within the evaluation
-                num_core     : Number of frozen core orbitals. 
                 coords       : Given grid coordinates (#coords,3)
             
                 Output:
                 ec              : Correlation energy density array evaluated on the given (batched) grid'''
                
                 #Extraction of molecular orbital functions
-                mol_orb_occ, mol_orb_virt = occ_virt_basis(mol, coords, mo_coeff,frozen_core,num_core)
+                mol_orb_occ, mol_orb_virt = occ_virt_basis(mol, coords, mo_coeff)
                     
                 #Extracting Hartree integral
                 I_integral=aux_basis_int(coords, Amol)
@@ -453,30 +408,27 @@ class ec_mp2_cs:
                 # 2st Intermediate T_eval: 
                 '0.5*T_{ijab}-T_{ijba}'
                 T_inter_ab = 0.5*T-T_transpose 
-                
-                with lock: #Lock tasks in one Thread
                     
-                    # Optimized contraction
-                    if self.optimal_contract:  
-                        #First sum 
-                        ec = oe.contract('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,df_coeff,I_integral,T_inter_ba,optimize='auto',memory_limit=self.max_num_array)
-                        #Second sum
-                        ec += oe.contract('ip,bp,mj,na,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,df_coeff,I_integral,T_inter_ab,optimize='auto',memory_limit=self.max_num_array)
-                    
-                    else:
-                        #First sum 
-                        ec = oe.contract('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,df_coeff,I_integral,T_inter_ba)
-                        #Second sum
-                        ec += oe.contract('ip,bp,mj,na,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,df_coeff,I_integral,T_inter_ab)
-                        
-                    if self.verbose: #Saving size of largest intermediate contraction arrays
-                        contract_info = oe.contract_path('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,df_coeff,I_integral,T_inter_ba)
-                        self.contract_size.append(contract_info[1].largest_intermediate * 8 / (1024**3)) #in GB    
+                if self.optimal_contract==0:  #No optimized contraction
+                    #First sum 
+                    ec = oe.contract('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,df_coeff,I_integral,T_inter_ba, optimize='auto', memory_limit=-1)
+                    #Second sum
+                    ec += oe.contract('ip,bp,mj,na,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,df_coeff,I_integral,T_inter_ab, optimize='auto', memory_limit=-1)
+                else: #Optimized contraction
+                    #First sum 
+                    ec = oe.contract('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                                   C_occ,C_virt,df_coeff,I_integral,T_inter_ba,optimize='auto',memory_limit=self.optimal_contract)
+
+                    #Second sum
+                    ec += oe.contract('ip,bp,mj,na,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                                   C_occ,C_virt,df_coeff,I_integral,T_inter_ab,optimize='auto',memory_limit=self.optimal_contract)
+               
+                if self.verbose: #Saving size of largest intermediate contraction arrays
+                    contract_info = oe.contract_path('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,df_coeff,I_integral,T_inter_ba)
+                    self.contract_size.append(contract_info[1].largest_intermediate * 8 / (1024**3)) #in GB    
                         
                 return ec      
               
@@ -486,28 +438,25 @@ class ec_mp2_cs:
             if self.verbose: #Saving size of auxiliary basis coefficients
                 self.df_coeff_size = self.df_coeff.size * self.df_coeff.itemsize / (1024**3) #in GB
                 print()
-                print('Memory usage of the auxiliary basis set coefficients:')
-                print(f'{self.df_coeff_size:.8f} GB')
+                print(f'Memory usage of the auxiliary basis set coefficients {self.df_coeff_size:.8f} GB')
                 print()
             
             #Evaluating the correlation energy density on given grid
             if self.batch_size==0: #No batches specified
                 if self.verbose:
                     print('Running correlation energy density evaluation on the full grid.')
-                self.ec = ec_density_eval_DF(T,self.mol,self.mo_coeff,C_occ,C_virt,self.df_coeff,self.Amol,
-                                             self.frozen_core,self.num_core,self.coords_batches)
+                self.ec = ec_density_eval_DF(T,self.mol,self.mo_coeff,C_occ,C_virt,self.df_coeff,self.Amol,self.coords_batches)
 
             else: #Batch-wise parallelization of the evaluation
                 if self.verbose:
                     print('Running correlation energy density evaluation on batch wise separated grid.')
                     
                 #Prestore arguments:
-                partial_ec_density_eval_DF = functools.partial(ec_density_eval_DF, T, self.mol, self.mo_coeff, C_occ, 
-                                        C_virt, self.df_coeff, self.Amol, self.frozen_core, self.num_core)
+                partial_ec_density_eval_DF = functools.partial(ec_density_eval_DF, T, self.mol, self.mo_coeff, C_occ, C_virt, self.df_coeff, self.Amol)
                 
                 #Parallelization
-                with ThreadPoolExecutor(max_workers=self.cpus_per_task) as executor: 
-                    
+                with ThreadPoolExecutor(max_workers=1) as executor: #Set 1 worker per thread for effective parallelization
+
                     #Submitting tasks and saving them at the right index
                     self.ec_per_batch = [None]*len(self.coords_batches) #Preallocate list 
                     
@@ -516,20 +465,17 @@ class ec_mp2_cs:
                         if self.verbose:
                             print(f'Submission for batches {idx} until {idx+self.cpus_per_task}')
                         coords_batch_par=self.coords_batches[idx:idx+self.cpus_per_task] #Collect batches
+
                         #Submit execution to available CPUs per batch
                         futures_indx = {executor.submit(partial_ec_density_eval_DF,batch): indx for indx, batch in enumerate(coords_batch_par)}
-                        # futures = [executor.submit(partial_ec_density_eval_DF,batch) for batch in coords_batch_par]
                         for future in as_completed(futures_indx):
                             if self.verbose:
                                 print(f'Finished batch evaluation {idx+futures_indx[future]}')
                             self.ec_per_batch[futures_indx[future]+idx]=jnp.array(future.result()) #Save results as jnp to ensure immutable
-                        #Clear execution and cache
-                        futures_indx.clear()   
-                        gc.collect()
 
                 #Combination of the resulting correlation energy density batches
                 self.ec = jnp.concatenate(self.ec_per_batch, axis=0)
-                
+
         else:   #Without density fitting
             ''' 
             Expansion to atomic orbitals yields the tensor multiplication from above.
@@ -559,7 +505,7 @@ class ec_mp2_cs:
                 return integralvalue    
             
             #Function to evaluate of the correlation energy density array without DF
-            def ec_density_eval_noDF(T,mol,mo_coeff,C_occ,C_virt,frozen_core,num_core,coords):
+            def ec_density_eval_noDF(T,mol,mo_coeff,C_occ,C_virt,coords):
                 '''Correlation energy density evaluation from the closed-shell formula 
                 using T_ijab and V_ijab:
                 
@@ -574,15 +520,13 @@ class ec_mp2_cs:
                 mo_coeff    : Coefficient matrix of the atomic orbitals (#basis,#basis)
                 C_occ       : Atomic orbital coefficients of occupied molecular orbitals (#basis,#occ_basis)
                 C_virt      : Atomic orbital coefficients of virtual molecular orbitals (#basis,#virt_basis)
-                frozen_core : Option to use frozen core orbitals within the evaluation
-                num_core    : Number of frozen core orbitals. 
                 coords      : Given grid coordinates (#coords,3)
                 
                 Output:               
                 ec           : correlation energy density array evaluated with no DF.'''
                
                 #Extraction of molecular orbital functions
-                mol_orb_occ, mol_orb_virt = occ_virt_basis(mol, coords, mo_coeff,frozen_core,num_core)
+                mol_orb_occ, mol_orb_virt = occ_virt_basis(mol, coords, mo_coeff)
                 
                 #Extracting Hartree integral
                 A_integral=tensor_int_fake(coords, mol)
@@ -598,27 +542,25 @@ class ec_mp2_cs:
                 '0.5*T_{ijab}-T_{ijba}'
                 T_inter_ab = 0.5*T-T_transpose 
 
-                with lock: #Lock tasks in one Thread
-
-                    if self.optimal_contract: # Optimized contraction
-                        #First sum 
-                        ec  = oe.contract('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T_inter_ba,optimize='auto',memory_limit=self.max_num_array)
-                        #Second sum 
-                        ec += oe.contract('ip,bp,mj,na,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T_inter_ab,optimize='auto',memory_limit=self.max_num_array)
-                    else:
-                        #First sum 
-                        ec  = oe.contract('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T_inter_ba)
-                        #Seond sum 
-                        ec += oe.contract('ip,bp,mj,na,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T_inter_ab)  
-                    
-                    if self.verbose: #Saving size of largest intermediate contraction arrays
-                        contract_info = oe.contract_path('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T_inter_ba)
-                        self.contract_size.append(contract_info[1].largest_intermediate * 8 / (1024**3)) #in GB
+                if self.optimal_contract==0: #No Optimized contraction
+                    #First sum 
+                    ec  = oe.contract('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T_inter_ba)
+                    #Seond sum 
+                    ec += oe.contract('ip,bp,mj,na,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T_inter_ab)  
+                else: #Optimized contraction
+                    #First sum 
+                    ec  = oe.contract('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T_inter_ba,optimize='auto',memory_limit=self.optimal_contract)
+                    #Second sum 
+                    ec += oe.contract('ip,bp,mj,na,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T_inter_ab,optimize='auto',memory_limit=self.optimal_contract)
+                
+                if self.verbose: #Saving size of largest intermediate contraction arrays
+                    contract_info = oe.contract_path('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T_inter_ba)
+                    self.contract_size.append(contract_info[1].largest_intermediate * 8 / (1024**3)) #in GB
 
                 return ec
                 
@@ -626,19 +568,17 @@ class ec_mp2_cs:
             if self.batch_size==0: #No batches specified
                 if self.verbose:
                     print('Running correlation energy density evaluation on the full grid.')
-                self.ec = ec_density_eval_noDF(T,self.mol,self.mo_coeff,C_occ,C_virt,self.frozen_core,
-                                               self.num_core,self.coords_batches)
+                self.ec = ec_density_eval_noDF(T,self.mol,self.mo_coeff,C_occ,C_virt,self.coords_batches)
 
             else: #Batch-wise parallelization of the evaluation
                 if self.verbose:
                     print('Running correlation energy density evaluation on batch wise separated grid.')
                     
                 #Prestore arguments:
-                partial_ec_density_eval_noDF = functools.partial(ec_density_eval_noDF, T, self.mol, self.mo_coeff, C_occ, 
-                                        C_virt, self.frozen_core, self.num_core)
+                partial_ec_density_eval_noDF = functools.partial(ec_density_eval_noDF, T, self.mol, self.mo_coeff, C_occ, C_virt)
                 
                 #Parallelization
-                with ThreadPoolExecutor(max_workers=self.cpus_per_task) as executor: 
+                with ThreadPoolExecutor(max_workers=1) as executor: #Set 1 worker per thread for effective parallelization
                     
                     #Submitting tasks and saving them at the right index
                     self.ec_per_batch = [None]*len(self.coords_batches) #Preallocate list 
@@ -648,23 +588,20 @@ class ec_mp2_cs:
                         if self.verbose:
                             print(f'Submission for batches {idx} until {idx+self.cpus_per_task}')
                         coords_batch_par=self.coords_batches[idx:idx+self.cpus_per_task] #Collect batches
+                        
                         #Submit execution to available CPUs per batch
                         futures_indx = {executor.submit(partial_ec_density_eval_noDF,batch): indx for indx, batch in enumerate(coords_batch_par)}
-                        # futures = [executor.submit(partial_ec_density_eval_DF,batch) for batch in coords_batch_par]
                         for future in as_completed(futures_indx):
                             if self.verbose:
                                 print(f'Finished batch evaluation {idx+futures_indx[future]}')
                             self.ec_per_batch[futures_indx[future]+idx]=jnp.array(future.result()) #Save results as jnp to ensure immutable
-                        #Clear execution and cache
-                        futures_indx.clear()   
-                        gc.collect()
 
                 #Combination of the resulting correlation energy density batches
                 self.ec = jnp.concatenate(self.ec_per_batch, axis=0)
         
         end_time = time.time()
         print()
-        print('Finished evaluation of the correlation energy density.')
+        print('Finished evaluation of the MP2 correlation energy density.')
         print('Elapsed total evaluation time: %.2f seconds' % np.abs(start_time-end_time))   
         print()
         if self.verbose: #Final printings
@@ -678,7 +615,7 @@ class ec_mp2_cs:
             print(f'Largest intermediate of the contraction path: {max(self.contract_size):.8f} GB')
             print(f'Correlation energy density array per batch: {self.ec_per_batch_size:.8f} GB')
             print(f'Full correlation energy density array: {self.ec_size:.8f} GB')
-            print('-------------------------------------------------------------')
+            print()
         
     
     '''MP2 correlation energy value'''
@@ -704,11 +641,19 @@ class ec_mp2_cs:
         ec = self.ec / rho 
         return ec           
     
+    '''Density weighted MP2 correlation energy density'''
+    @property 
+    def rho_weighted(self):
+        
+        ec_rho = self.ec #Density weights already included in evaluation
+        
+        return ec_rho            
+    
 
 
-### Opposite spin based MP2 correlation energy density ###
+### Opposite-spin based MP2 correlation energy density ###
 '''       
-The opposite spin based MP2 correlation energy density reads
+The opposite-spin based MP2 correlation energy density reads
     
 e_c_os^{MP2}(r_p) = - 1/(2*rho(r_p))*sum_{ijab}[V_{ijabp}*T_{ijab} + V_{ijbap}T_{ijba}],
            
@@ -726,42 +671,29 @@ V_{ijabp} = phi_i(r_p)phi_a(r_p)*sum_{mn}[C_{mj}*C_{nb} *int (chi_m(r')*chi_n(r'
           = phi_i(r_p)phi_a(r_p)*sum_{mn}[C_{mj}*C_{nb}*A_{mnp}]
 '''
 class ec_mp2_os:
-    ''' Evaluation of the opposite spin based MP2 correlation energy density. 
+    ''' Evaluation of the opposite-spin (os) based MP2 correlation energy density. 
         Density fitting, batchwise parallelization, frozen core orbitals or 
         kappa regularization are optional arguments. 
         
         Example:
-
-        >>>batch_size=0 
-        >>>verbose=False/True 
-        >>>DF=True/False 
-        >>>optimal_contract=True
-        >>>max_num_array=5000
-        >>>frozen_core=False
-        >>>spinorb=False
-        >>>num_core='auto'  
-        >>>kappa='inf'
-        >>>kwargs = ec_mp2_kwargs(batch_size,DF,verbose,optimal_contract,max_num_array,frozen_core,
-                    spinorb,num_core,kappa)
-        >>>atom_geom = 'He 0 0 0'
-        >>>basis = 'def2-tzvp'
-        >>>Abasis = 'def2tzvpri' #aux basis for MP2 correlation energy
-        >>>mol = gto.M(atom=atom_geom, basis=basis)
-        >>>mf = dft.RKS(mol) 
-        >>>mf.xc = 'hf'  
-        >>>mf.kernel()
-        >>>args = ec_mp2_args(mf,mol,Abasis)
-        >>>Ec_os=ec_mp2_os(*args, *kwargs)
-        >>>print('os MP2 correlation energy: %s' % Ec_os.energy)
+        >>> kwargs = ec_mp2_kwargs()
+        >>> atom_geom = 'He 0 0 0'
+        >>> basis = 'def2-tzvp'
+        >>> Abasis = 'def2tzvpri' 
+        >>> mol = gto.M(atom=atom_geom, basis=basis)
+        >>> mf = dft.RKS(mol) 
+        >>> mf.xc = 'hf'  
+        >>> mf.kernel()
+        >>> args = ec_mp2_args(mf,mol,Abasis)
+        >>> Ec=ec_mp2_os(*args, *kwargs)
+        >>> print('Opposite-spin based MP2 correlation energy: %s' % Ec.energy)
         '''
 
     def __init__(self,dm,mol,Amol,mo_coeff,mo_occ,mo_energies,coords,weights,
-                 batch_size=0,DF=True,verbose=False, optimal_contract=False, max_num_array=None,
-                 frozen_core=False,spinorb=False,num_core='auto',kappa='inf'):
+                 batch_size=0, kappa='inf', optimal_contract=0, frozen_core=0, verbose=False):
         '''
-        
         *args* 
-        dm          : Density matrix from a scf calculation (#basis,#basis)
+        dm          : Density matrix from a closed-shell scf calculation (#basis,#basis)
         mol         : gto molecular structure incorporating the basis set
         Amol        : PySCF Mol, with aux. basis, e.g., Amol = df.addons.make_auxmol(mol, Abasis)
         mo_coeff    : Coefficient matrix of the atomic orbitals (#basis,#basis)
@@ -771,15 +703,14 @@ class ec_mp2_os:
         weights     : Grid weights (#coords,1)
         
         **kwargs
-        batch_size = 0           : Grid batch size to run the evaluation on, 0 is for no parallelization
-        DF = True                : Density fitting option
-        verbose = False          : Additional printings of time and memory statements
-        optimal_contract = False : Optimized contraction algorithm for the opt_einsum summation path
-        max_num_array = None     : Maximum number of elements in a temporary array for the optimal contraction path, requires a postive integer.
-        frozen_core = False      : Frozen core orbital option
-        spinorb = False          : Specification of the spin orbital usage of frozen core orbitals, False for R/U is fine
-        num_core = 'auto'        : Amount of frozen orbitals, 'auto' selects the core ones.
-        kappa = 'inf'            : Laplace transform regularization parameter for the doubles amplitudes, 'inf' for no regularization (original MP2 expression)
+        batch_size = 0          : Batch size to run the evaluation on, 0 is for no parallelization
+        kappa = 'inf'           : Laplace transform regularization parameter for the doubles amplitudes
+                                  ('inf' for no regularization, else positive integer).
+        optimal_contract = 0    : Optimized contraction algorithm option (0 by default, else positive integer
+                                  representing number of elements in temporary array for the optimal contraction path).
+        frozen_core = 0         : Frozen core orbital option (0 by default, 'auto' selects core orbitals
+                                  automatically, else positive integer below number of orbitals).
+        verbose = False         : Additional printings of time and memory statements
         '''
         
         #Saving arguments of the class
@@ -792,29 +723,35 @@ class ec_mp2_os:
         self.coords             = coords
         self.weights            = weights
         self.batch_size         = batch_size
-        self.DF                 = DF
         self.verbose            = verbose
         self.optimal_contract   = optimal_contract
         self.frozen_core        = frozen_core
         self.kappa              = kappa
         
+        #Extracting the number of virtual and occupied orbitals
+        self.Nocc, self.Nvirt  = orb_occ_virt(self.mo_occ)    
+        
+        #========================================#
         #Checking input...
-        if self.optimal_contract: #Einsum contraction option
-            self.max_num_array   = max_num_array
-            #Check value of memory limit:
-            if isinstance(self.max_num_array,int)==False or self.max_num_array < 0 or self.max_num_array ==0:
-                print('Memory limit for optimal contraction has to be a positive integer in MB')
-                sys.exit()()
+        if self.Amol is None or isinstance(self.Amol,gto.mole.Mole): #DF option
+            pass
+        else:
+            print('Amol needs to be a string name for the corresponding auxilliary basis set or "None" for no density fitting.')
+            sys.exit()()
         
         if isinstance(self.batch_size,int)==False or self.batch_size <0:  #Batch size option
-            print('batch_size argument hast to be a positive integer or 0 for no parallelization')
+            print('batch_size argument hast to be a positive integer or 0 for no parallelization.')
             sys.exit()()    
         
-        if isinstance(num_core,int)==False or num_core < 0: #Number of core orbitals
-            if num_core == 'auto':
+        if self.optimal_contract < 0 or isinstance(self.optimal_contract,int)==False: #Optimal contraction size
+            print('optimal_contract argument has to be a positive integer or 0 for no optimal contraction.')
+            sys.exit()
+        
+        if isinstance(self.frozen_core,int)==False or self.frozen_core < 0: #Number of frozen core orbitals
+            if self.frozen_core == 'auto':
                 pass
             else:
-                print('''Number of core orbitals must be a positive integer or 'auto' for automatic assignement''')
+                print('''Number of frozen core orbitals must be a positive integer, 'auto' for automatic assignement or 0 for no frozen core approximation.''')
                 sys.exit()()
        
         if isinstance(self.kappa, (int,float))==False or self.kappa < 0: #Kappa regularization 
@@ -824,38 +761,24 @@ class ec_mp2_os:
                 print('''The regularization paramater kappa has to be a positive real number, 0 or 'inf'.''')
                 sys.exit()()  
 
-        #========================================#
+         #========================================#
         # Extra Functions for T_ijab and V_ijabp 
         
         #Two-body integrals of occupied and virtual molecular orbitals
-        def two_body_integrals(mo_coeff,mo_occ,mol,frozen_core,num_core):
+        def two_body_integrals(mo_coeff,mol):
             '''Two-body integral computation of occupied and virtual molecular orbital functions: <ij|ab>.
             
             Input:
             mo_coeff          : Coefficient matrix of the atomic orbitals (#basis,#basis)
-            mo_occ            : Molecular orbital occupation numbers (#basis,)
             mol               : gto molecular geometry
-            frozen_core       : Frozen core orbital option
-            num_core          : Amount of frozen orbitals, 'auto' selects the core ones.
             
             Output: 
-            two_integral_eval        : Two integral value depending on the molecular orbital function index
+            two_integral_eval : Two integral value depending on the molecular orbital function index
             (#occ_basis,#occ_basis,#virt_basis,#virt_basis)'''    
             
-            #Extracting the number of total and occupied orbitals
-            Nocc, Nvirt  = orb_occ_virt(mo_occ)
-                
-            #Check for frozen core orbital option
-            if frozen_core:
-                #iajb integrals (iofree):
-                two_integral_eval_0 = ao2mo.outcore.general_iofree(mol, (mo_coeff[:,num_core:Nocc], mo_coeff[:,Nocc:],
-            mo_coeff[:,num_core:Nocc],mo_coeff[:,Nocc:]),compact=False).reshape(Nocc-num_core,Nvirt,Nocc-num_core,Nvirt)
-            
-            else:
-                #iajb integrals (iofree):
-                two_integral_eval_0 = ao2mo.outcore.general_iofree(mol, (mo_coeff[:,:Nocc], mo_coeff[:,Nocc:],
-            mo_coeff[:,:Nocc],mo_coeff[:,Nocc:]),compact=False).reshape(Nocc,Nvirt,Nocc,Nvirt)
-            
+            #iajb integrals (iofree):
+            two_integral_eval_0 = ao2mo.outcore.general_iofree(mol, (mo_coeff[:,self.frozen_core:self.Nocc], mo_coeff[:,self.Nocc:],
+            mo_coeff[:,self.frozen_core:self.Nocc],mo_coeff[:,self.Nocc:]),compact=False).reshape(self.Nocc-self.frozen_core,self.Nvirt,self.Nocc-self.frozen_core,self.Nvirt)
             
             #ijab integrals:    
             two_integral_eval = two_integral_eval_0.transpose((0,2,1,3));
@@ -863,7 +786,7 @@ class ec_mp2_os:
             return two_integral_eval 
 
         #Partial MP2 doubles amplitude T_ijab
-        def part_mp2_amplitude(mol,mo_coeff, mo_energies,mo_occ,frozen_core,num_core, kappa):
+        def part_mp2_amplitude(mol,mo_coeff, mo_energies,mo_occ,kappa):
             '''Evaluation of the partial MP2 doubles amplitude:
             
             T_{ijab}=(<ij|ab>)/(eps_a+eps_b-eps_i-eps_j)
@@ -873,8 +796,6 @@ class ec_mp2_os:
             mo_coeff      : Coefficient matrix of the atomic orbitals (#basis,#basis)
             mo_energies   : Orbital energies (#basis,)
             mo_occ        : Occupation numbers (#basis,)
-            frozen_core   : Frozen core orbital option
-            num_core      : Amount of frozen orbitals, 'auto' selects the core ones.
             kappa = 'inf' : Laplace transform regularization parameter for the doubles amplitudes,
                             'inf' for no regularization (original MP2 expression)
             
@@ -886,30 +807,22 @@ class ec_mp2_os:
             orbs_energies_occ  = mo_energies[mo_occ > 0] #Energies of occupied orbitals
             orbs_energies_virt = mo_energies[mo_occ ==0] #Energies of virtual orbitals
             
-            #Extracting the number of total and occupied orbitals
-            Nocc, Nvirt  = orb_occ_virt(mo_occ)
-            UC = Nvirt
-            
-            #Checking for frozen core orbital option
-            if frozen_core:
-                OC = Nocc-num_core #Updated number of occupied orbitals
-                orbs_energies_occ = orbs_energies_occ[num_core:] #Updated list of orbital energies
-                
-            else:
-                OC = Nocc
+            #Updating number and energies of occupied orbitals
+            OC = self.Nocc-self.frozen_core 
+            orbs_energies_occ = orbs_energies_occ[self.frozen_core:]  
 
             #Denominator of orbital energies:
-            Eps=np.zeros([OC,OC,UC,UC])
+            Eps=np.zeros([OC,OC,self.Nvirt,self.Nvirt])
             
             for i in np.arange(OC):
                 for j in np.arange(OC):
-                    for a in np.arange(UC):
-                        for b in np.arange(UC):
+                    for a in np.arange(self.Nvirt):
+                        for b in np.arange(self.Nvirt):
                             Eps[i,j,a,b] = orbs_energies_virt[a] + orbs_energies_virt[b] - orbs_energies_occ[i] - orbs_energies_occ[j]
             
             
             #Evaluate two body integrals
-            T_ijab = two_body_integrals(mo_coeff,mo_occ,mol,frozen_core,num_core)
+            T_ijab = two_body_integrals(mo_coeff,mol)
             
             #Final partial MP2 doubles amplitude
             if kappa == 'inf':
@@ -920,15 +833,13 @@ class ec_mp2_os:
             return T_eval
 
         #Evaluation of virtual and occupied orbital functions
-        def occ_virt_basis(mol, coords, mo_coeff,frozen_core,num_core):
+        def occ_virt_basis(mol, coords, mo_coeff):
             '''Extracting orbital functions from the atomic orbitals (basis set) and molecular orbital coefficients
             
             Input:
             mol         : gto molecular structure incorporating the basis set
             coords      : Grid coordinates (#coords,3)
             mo_coeff    : Coefficient matrix of the atomic orbitals (#basis,#basis)
-            frozen_core : Option to use frozen core orbitals within the evaluation
-            num_core    : Number of frozen core orbitals. 
             
             Output:
             mol_orb_occ  : Occupied molecular orbital functions evaluated on the grid (#occ-basis, #coords)
@@ -941,49 +852,39 @@ class ec_mp2_os:
             mol_orb = np.einsum('ji,pj->ip',mo_coeff,ao_value[0])        #   (#basis, #coords)
             
             #Check for frozen core orbital option
-            if frozen_core:
-                mol_orb_occ = mol_orb[num_core:Nocc,:]                  #   (#occ_basis-#core_orb, #coords)
-            else:
-                mol_orb_occ = mol_orb[:Nocc,:]                          #   (#occ_basis, #coords)
+            mol_orb_occ = mol_orb[self.frozen_core:self.Nocc,:]               #   (#occ_basis-#core_orb, #coords)
                 
             #Extracting virtual orbitals
-            mol_orb_virt = mol_orb[Nocc:,:]                              #   (#vir-basis, #coords)
+            mol_orb_virt = mol_orb[self.Nocc:,:]                              #   (#vir-basis, #coords)
          
             return mol_orb_occ, mol_orb_virt
         
         #=======================================#
-        
-        #Extracting the number of virtual and occupied orbitals
-        Nocc, Nvirt  = orb_occ_virt(self.mo_occ)     
-         
         #Initialized printing:
         
-        print('Opposite spin based MP2 correlation energy density modelling.')
+        print('---------------------------------------------------------------')
+        print(' Opposite-spin (os) MP2 correlation energy density evaluation  ')
+        print('---------------------------------------------------------------')
         
         if self.verbose: #Parameter printing
-            print('Evaluation parameters: ')
+            print('Evaluation arameters: ')
             print('Batch wise parallelization = ' + str(self.batch_size > 0))
-            print('Density fitting = ' + str(self.DF))
-            print('Optimized einsum path = ' + str(self.optimal_contract))
+            print('Density fitting = ' + str(isinstance(self.Amol,gto.mole.Mole)))
+            print('Optimized einsum path = ' + str(self.optimal_contract > 0))
             print('Frozen core orbitals = ' + str(self.frozen_core))
             print('Initialising evaluation of the necessary components.')
-            print(f'Number of occupied molecular orbitals is {Nocc}.')
-            print(f'Number of virtual molecular orbitals is {Nvirt}.')
+            print(f'Number of occupied molecular orbitals is {self.Nocc}.')
+            print(f'Number of virtual molecular orbitals is {self.Nvirt}.')
             self.contract_size = [] #Preallocate largest memory usage of contraction
                
         #Freezing the core orbitals
-        if self.frozen_core:
-            if num_core == 'auto': #Automatic frozen core orbitals
-                self.num_core = num_core_orb(self.mol,spinorb)
-            else: #Manually chosen frozen core orbitals
-                self.num_core = num_core
-            if self.verbose:
-                print()
-                print('The number of frozen core orbitals for the evaluation is %s out of %s occupied orbitals' % (self.num_core,Nocc))
-        else: #No frozen core orbitals
-            self.num_core = 0     
-        
-        
+        if self.frozen_core=='auto': #Automatic choice of frozen core orbitals
+            self.frozen_core = int(num_core_orb(self.mol))
+        if self.verbose:
+            print()
+            print('The first %s out of %s occupied orbitals are set frozen'
+                  % (self.frozen_core,self.Nocc))
+    
         #Starting evaluation
         #====================#
         if self.verbose: #Initial printing
@@ -995,21 +896,25 @@ class ec_mp2_os:
         
         # Partial MP2 doubles amplitude T_ijab (#occ_basis,#occ_basis,#virt_basis,#virt_basis)
         T = part_mp2_amplitude(self.mol,self.mo_coeff, self.mo_energies,
-                               self.mo_occ,self.frozen_core,self.num_core,self.kappa)
+                               self.mo_occ,self.kappa)
         if self.verbose: #Saving size of T_ijab
             self.T_size = (T.size * T.itemsize) / (1024**3)  #in GB
             print('Memory usage of T_ijab:')
             print(f'{self.T_size:.8f} GB')
-            print()
         
         #Extraction of atomic orbital coefficients 
-        if self.frozen_core:
-            C_occ  = self.mo_coeff[:,self.num_core:Nocc] #Occupied orbitals (#basis, #occ_basis-#core_orb)
-        else:
-            C_occ  = self.mo_coeff[:,:Nocc]         #Occupied orbitals (#basis, #occ_basis)                
+        C_occ  = self.mo_coeff[:,self.frozen_core:self.Nocc] #Occupied orbitals (#basis, #occ_basis-#core_orb)
+        C_virt = self.mo_coeff[:,self.Nocc:]                 #Virtual orbitals (#basis, #virt-basis)
         
-        C_virt = self.mo_coeff[:,Nocc:]             #Virtual orbitals (#basis, #virt-basis)
-        
+        if self.verbose: #Saving size of orbital coefficients
+            self.C_occ_size = C_occ.size * C_occ.itemsize / (1024**3) #in GB
+            print(f'Memory usage of C_occ {self.C_occ_size:.8f} GB')
+            self.C_virt_size = C_virt.size * C_virt.itemsize / (1024**3) #in GB
+            print(f'Memory usage of C_virt {self.C_virt_size:.8f} GB')
+            self.mo_coeff_size = self.mo_coeff.size * self.mo_coeff.itemsize / (1024**3) #in GB
+            print(f'Memory usage of mo_coeff {self.mo_coeff_size:.8f} GB')
+            print()
+                 
         #Batch seperation options:    
         if self.batch_size==0: #No parallelization 
             if self.verbose:
@@ -1032,13 +937,13 @@ class ec_mp2_os:
                 self.cpus_per_task = int(self.cpus_per_task)
             else:
                 self.cpus_per_task = os.cpu_count()
-                
+                   
             # Print the number of available CPU cores
             if self.verbose:
                 print('Batch-wise evaluation on %s available CPU cores.' % self.cpus_per_task)
         
         #Check for density fitting option
-        if DF:  #Density fitting
+        if self.Amol is not None:  #Density fitting
             ''' Further expansion of V with a density fitted auxiliary basis set:
 
             A_{mnp}  = sum_{t}Q_{tmn}int psi_t(r')/(r_p-r')dr'
@@ -1070,8 +975,8 @@ class ec_mp2_os:
                 return I      
                      
             #Function to evaluate of the correlation energy density array with DF
-            def ec_density_eval_DF(T,mol,mo_coeff,C_occ,C_virt, df_coeff, Amol, frozen_core, num_core,coords):
-                '''Correlation energy density evaluation from the opposite spin closed-shell formula 
+            def ec_density_eval_DF(T,mol,mo_coeff,C_occ,C_virt, df_coeff, Amol,coords):
+                '''Correlation energy density evaluation from the opposite-spin closed-shell formula 
                 using T_ijab and V_ijab in the DF expansion:
                 
                 e_c(r_p)  = 0.5*w'_0(r_p)*rho(r_p)
@@ -1086,46 +991,40 @@ class ec_mp2_os:
                 C_virt       : Atomic orbital coefficients of virtual molecular orbitals (#basis,#virt_basis)
                 df_coeff     : coefficient matrix from density fitting (#aux-basis,#basis,#basis)
                 Amol         : PySCF Mol, with aux. basis, e.g., Amol = df.addons.make_auxmol(mol, Abasis)
-                frozen_core  : Option to use frozen core orbitals within the evaluation
-                num_core     : Number of frozen core orbitals. 
                 coords       : Given grid coordinates (#coords,3)
             
                 Output:
-                ec           : Opposite spin based correlation energy density array evaluated on the given (batched) grid'''
+                ec           : Opposite-spin based correlation energy density array evaluated on the given (batched) grid'''
                
                 #Extraction of molecular orbital functions
-                mol_orb_occ, mol_orb_virt = occ_virt_basis(mol, coords, mo_coeff,frozen_core,num_core)
+                mol_orb_occ, mol_orb_virt = occ_virt_basis(mol, coords, mo_coeff)
                     
                 #Extracting Hartree integral
                 I_integral=aux_basis_int(coords, Amol)
                 
                 #Handling partial MP2 doubles amplitude (a<->b)
                 T_transpose = np.transpose(T,(0,1,3,2))
-                
-                with lock: #Lock tasks in one Thread
                         
-                    # Optimized contraction
-                    if self.optimal_contract:  
-                        #First sum 
-                        ec = oe.contract('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                            C_occ,C_virt,df_coeff,I_integral,T,optimize='auto',memory_limit=self.max_num_array)
-                        #Second sum
-                        ec += oe.contract('ip,bp,mj,na,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                            C_occ,C_virt,df_coeff,I_integral,T_transpose,optimize='auto',memory_limit=self.max_num_array)
+                if self.optimal_contract==0: #No optimized contraction
+                    #First sum 
+                    ec = oe.contract('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,df_coeff,I_integral,T)
+                    #Second sum
+                    ec += oe.contract('ip,bp,mj,na,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,df_coeff,I_integral,T_transpose)
+                else: #Optimized contraction
+                    #First sum 
+                    ec = oe.contract('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                        C_occ,C_virt,df_coeff,I_integral,T,optimize='auto',memory_limit=self.optimal_contract)
+                    #Second sum
+                    ec += oe.contract('ip,bp,mj,na,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                        C_occ,C_virt,df_coeff,I_integral,T_transpose,optimize='auto',memory_limit=self.optimal_contract)
                     
-                    else:
-                        #First sum 
-                        ec = oe.contract('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,df_coeff,I_integral,T)
-                        #Second sum
-                        ec += oe.contract('ip,bp,mj,na,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,df_coeff,I_integral,T_transpose)
-                        
-                    if self.verbose: #Saving size of largest intermediate contraction arrays
-                        contract_info = oe.contract_path('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,df_coeff,I_integral,T)
-                        self.contract_size.append(contract_info[1].largest_intermediate * 8 / (1024**3)) #in GB    
-                        
+                if self.verbose: #Saving size of largest intermediate contraction arrays
+                    contract_info = oe.contract_path('ip,ap,mj,nb,tmn,pt,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,df_coeff,I_integral,T)
+                    self.contract_size.append(contract_info[1].largest_intermediate * 8 / (1024**3)) #in GB    
+                    
                 return -0.5 * ec      
               
             #Density fitting coefficients for the auxliliary basis set (#aux-basis, #basis, #basis)
@@ -1134,27 +1033,24 @@ class ec_mp2_os:
             if self.verbose: #Saving size of auxiliary basis coefficients
                 self.df_coeff_size = self.df_coeff.size * self.df_coeff.itemsize / (1024**3) #in GB
                 print()
-                print('Memory usage of the auxiliary basis set coefficients:')
-                print(f'{self.df_coeff_size:.8f} GB')
+                print(f'Memory usage of the auxiliary basis set coefficients {self.df_coeff_size:.8f} GB')
                 print()
             
             #Evaluating the correlation energy density on given grid
             if self.batch_size==0: #No batches specified
                 if self.verbose:
                     print('Running correlation energy density evaluation on the full grid.')
-                self.ec = ec_density_eval_DF(T,self.mol,self.mo_coeff,C_occ,C_virt,self.df_coeff,self.Amol,
-                                             self.frozen_core,self.num_core,self.coords_batches)
+                self.ec = ec_density_eval_DF(T,self.mol,self.mo_coeff,C_occ,C_virt,self.df_coeff,self.Amol,self.coords_batches)
 
             else: #Batch-wise parallelization of the evaluation
                 if self.verbose:
                     print('Running correlation energy density evaluation on batch wise separated grid.')
                     
                 #Prestore arguments:
-                partial_ec_density_eval_DF = functools.partial(ec_density_eval_DF, T, self.mol, self.mo_coeff, C_occ, 
-                                        C_virt, self.df_coeff, self.Amol, self.frozen_core, self.num_core)
+                partial_ec_density_eval_DF = functools.partial(ec_density_eval_DF, T, self.mol, self.mo_coeff, C_occ, C_virt, self.df_coeff, self.Amol)
                 
                 #Parallelization
-                with ThreadPoolExecutor(max_workers=self.cpus_per_task) as executor: 
+                with ThreadPoolExecutor(max_workers=1) as executor: #Set 1 worker per thread for effective parallelization
                     
                     #Submitting tasks and saving them at the right index
                     self.ec_per_batch = [None]*len(self.coords_batches) #Preallocate list 
@@ -1164,20 +1060,16 @@ class ec_mp2_os:
                         if self.verbose:
                             print(f'Submission for batches {idx} until {idx+self.cpus_per_task}')
                         coords_batch_par=self.coords_batches[idx:idx+self.cpus_per_task] #Collect batches
+                        
                         #Submit execution to available CPUs per batch
                         futures_indx = {executor.submit(partial_ec_density_eval_DF,batch): indx for indx, batch in enumerate(coords_batch_par)}
-                        # futures = [executor.submit(partial_ec_density_eval_DF,batch) for batch in coords_batch_par]
                         for future in as_completed(futures_indx):
                             if self.verbose:
                                 print(f'Finished batch evaluation {idx+futures_indx[future]}')
                             self.ec_per_batch[futures_indx[future]+idx]=jnp.array(future.result()) #Save results as jnp to ensure immutable
-                        #Clear execution and cache
-                        futures_indx.clear()   
-                        gc.collect()
 
                 #Combination of the resulting correlation energy density batches
                 self.ec = jnp.concatenate(self.ec_per_batch, axis=0)
-
                 
         else:   #Without density fitting
             ''' 
@@ -1208,8 +1100,8 @@ class ec_mp2_os:
                 return integralvalue    
             
             #Function to evaluate of the correlation energy density array without DF
-            def ec_density_eval_noDF(T,mol,mo_coeff,C_occ,C_virt,frozen_core,num_core,coords):
-                '''Opposite spin based correlation energy density evaluation from the closed-shell formula 
+            def ec_density_eval_noDF(T,mol,mo_coeff,C_occ,C_virt,coords):
+                '''Opposite-spin based correlation energy density evaluation from the closed-shell formula 
                 using T_ijab and V_ijab:
                 
                 ec(r_p) := 0.5*w'_0(r_p)*rho(r_p)
@@ -1222,63 +1114,57 @@ class ec_mp2_os:
                 mo_coeff    : Coefficient matrix of the atomic orbitals (#basis,#basis)
                 C_occ       : Atomic orbital coefficients of occupied molecular orbitals (#basis,#occ_basis)
                 C_virt      : Atomic orbital coefficients of virtual molecular orbitals (#basis,#virt_basis)
-                frozen_core : Option to use frozen core orbitals within the evaluation
-                num_core    : Number of frozen core orbitals
                 coords      : Given grid coordinates (#coords,3)
                 
                 Output:               
-                ec          : Opposite spin based correlation energy density array evaluated with no DF.'''
+                ec          : Opposite-spin based correlation energy density array evaluated with no DF.'''
                
                 #Extraction of molecular orbital functions
-                mol_orb_occ, mol_orb_virt = occ_virt_basis(mol, coords, mo_coeff,frozen_core,num_core)
+                mol_orb_occ, mol_orb_virt = occ_virt_basis(mol, coords, mo_coeff)
                 
                 #Extracting Hartree integral
                 A_integral=tensor_int_fake(coords, mol)
                 
                 #Handling partial MP2 doubles amplitude (a<->b)
                 T_transpose = np.transpose(T,(0,1,3,2))
-
-                with lock: #Lock tasks in one Thread
-                        
-                    if self.optimal_contract: # Optimized contraction
-                        #First sum 
-                        ec  = oe.contract('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T,optimize='auto',memory_limit=self.max_num_array)
-                        #Second sum 
-                        ec += oe.contract('ip,bp,mj,na,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T_transpose,optimize='auto',memory_limit=self.max_num_array)
-                    else:
-                        #First sum 
-                        ec  = oe.contract('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T)
-                        #Seond sum 
-                        ec += oe.contract('ip,bp,mj,na,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T_transpose)  
-                    
-                    if self.verbose: #Saving size of largest intermediate contraction arrays
-                        contract_info = oe.contract_path('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
-                                        C_occ,C_virt,A_integral,T)
-                        self.contract_size.append(contract_info[1].largest_intermediate * 8 / (1024**3)) #in GB
-                    
+                     
+                if self.optimal_contract==0: # No Optimized contraction
+                    #First sum 
+                    ec  = oe.contract('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T)
+                    #Seond sum 
+                    ec += oe.contract('ip,bp,mj,na,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T_transpose)  
+                else:
+                    #First sum 
+                    ec  = oe.contract('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T,optimize='auto',memory_limit=self.optimal_contract)
+                    #Second sum 
+                    ec += oe.contract('ip,bp,mj,na,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T_transpose,optimize='auto',memory_limit=self.optimal_contract)
+                
+                if self.verbose: #Saving size of largest intermediate contraction arrays
+                    contract_info = oe.contract_path('ip,ap,mj,nb,mnp,ijab->p',mol_orb_occ,mol_orb_virt,
+                                    C_occ,C_virt,A_integral,T)
+                    self.contract_size.append(contract_info[1].largest_intermediate * 8 / (1024**3)) #in GB
+                
                 return -0.5 * ec
                 
             #Evaluating the correlation energy density on given grid
             if self.batch_size==0: #No batches specified
                 if self.verbose:
                     print('Running correlation energy density evaluation on the full grid.')
-                self.ec = ec_density_eval_noDF(T,self.mol,self.mo_coeff,C_occ,C_virt,self.frozen_core,
-                                               self.num_core,self.coords_batches)
+                self.ec = ec_density_eval_noDF(T,self.mol,self.mo_coeff,C_occ,C_virt,self.coords_batches)
 
             else: #Batch-wise parallelization of the evaluation
                 if self.verbose:
                     print('Running correlation energy density evaluation on batch wise separated grid.')
                     
                 #Prestore arguments:
-                partial_ec_density_eval_noDF = functools.partial(ec_density_eval_noDF, T, self.mol, self.mo_coeff, C_occ, 
-                                        C_virt, self.frozen_core, self.num_core)
+                partial_ec_density_eval_noDF = functools.partial(ec_density_eval_noDF, T, self.mol, self.mo_coeff, C_occ, C_virt)
                 
                 #Parallelization
-                with ThreadPoolExecutor(max_workers=self.cpus_per_task) as executor: 
+                with ThreadPoolExecutor(max_workers=1) as executor: #Set 1 worker per thread for effective parallelization
                     
                     #Submitting tasks and saving them at the right index
                     self.ec_per_batch = [None]*len(self.coords_batches) #Preallocate list 
@@ -1290,21 +1176,17 @@ class ec_mp2_os:
                         coords_batch_par=self.coords_batches[idx:idx+self.cpus_per_task] #Collect batches
                         #Submit execution to available CPUs per batch
                         futures_indx = {executor.submit(partial_ec_density_eval_noDF,batch): indx for indx, batch in enumerate(coords_batch_par)}
-                        # futures = [executor.submit(partial_ec_density_eval_DF,batch) for batch in coords_batch_par]
                         for future in as_completed(futures_indx):
                             if self.verbose:
                                 print(f'Finished batch evaluation {idx+futures_indx[future]}')
                             self.ec_per_batch[futures_indx[future]+idx]=jnp.array(future.result()) #Save results as jnp to ensure immutable
-                        #Clear execution and cache
-                        futures_indx.clear()   
-                        gc.collect()
                 
                 #Combination of the resulting correlation energy density batches
                 self.ec = jnp.concatenate(self.ec_per_batch, axis=0)
         
         end_time = time.time()
         print()
-        print('Finished evaluation of the opposite spin based correlation energy density.')
+        print('Finished evaluation of the opposite-spin based MP2 correlation energy density.')
         print('Elapsed total evaluation time: %.2f seconds' % np.abs(start_time-end_time))   
         print()
         if self.verbose: #Final printings
@@ -1318,10 +1200,10 @@ class ec_mp2_os:
             print(f'Largest intermediate of the contraction path:{max(self.contract_size):.8f} GB')
             print(f'Correlation energy density array per batch: {self.ec_per_batch_size:.8f} GB')
             print(f'Full correlation energy density array: {self.ec_size:.8f} GB')
-            print('-------------------------------------------------------------')
+            print()
         
-      
-    '''MP2 correlation energy value'''
+        
+    '''Opposite-spin MP2 correlation energy value'''
     @property
     def energy(self):
     
@@ -1330,7 +1212,7 @@ class ec_mp2_os:
     
         return Ec_value
         
-    '''MP2 correlation energy density evaluated on the grid'''
+    '''Opposite-spin MP2 correlation energy density evaluated on the grid'''
     @property    
     def array(self):
         '''ec(r)=1/rho(r) * ec^{MP2}(r)'''
@@ -1344,6 +1226,13 @@ class ec_mp2_os:
         ec = self.ec / rho 
         return ec           
     
+    '''Density weighted opposite-spin MP2 correlation energy density'''
+    @property 
+    def rho_weighted(self):
+        
+        ec_rho = self.ec #Density weighted energy density
+        
+        return ec_rho      
 
 
 #============================================#
@@ -1541,5 +1430,4 @@ def num_core_orb(mol, spinorb=False):
     num_core = elements.chemcore(mol, spinorb)
     
     return num_core   
-    
 

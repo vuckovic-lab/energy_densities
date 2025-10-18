@@ -1,5 +1,5 @@
 '''Python scripts to extract and collect fixed and optional arguments for the 
-correlation energy density evaluation.'''
+correlation energy density evaluation with the local slope modelling. '''
 
 
 from pyscf import dft, scf, df
@@ -7,7 +7,7 @@ import numpy as np
 
 
 #Extracting necessary input args to a list
-def ec_mp2_args(mf,mol,Abasis,grids=3):
+def ec_mp2_args(mf,mol,grids=3,DF=None):
     '''Extracts the input arguments from a SCF kernel calculations for ec_mp2 evaluation. 
     Also creates or reads optionally a 3D mesh grid and adds artificial uniform weights.
     Make sure to use * to unpack.
@@ -15,21 +15,23 @@ def ec_mp2_args(mf,mol,Abasis,grids=3):
     Input: 
     mf           : SCF class calculation
     mol          : GTO molecular structure
-    Abasis       : String specifying the auxiliary basis set
-    grids=3      : pyscf.dft generated grid with a specified grid level or a user defined 3D grid.
+    grids=3      : pyscf.dft generated grid with a specified grid level or a user defined 3D grid
+    DF=None      : Density fitting string specifying the auxiliary basis set (None for no density fitting)
     
     Output:
     args    : List of output objects, which are needed for the ec_mp2 functions
-              0:dm, 1:mol, 2:Amol, 3:mo_coeff, 4:mo_occ,
-              5:mo_energies, 6:coords, 7:weights'''
+              0:dm, 1:mol, 2:Amol, 3:mo_coeff, 4:mo_occ, 5:mo_energies, 6:coords, 7:weights'''
     
     
     dm          = mf.make_rdm1()                     #Density matrix (#basis,#basis)
     mo_coeff    = mf.mo_coeff                        #Coefficient matrix of the atomic orbitals (#basis,#basis)
     mo_occ      = mf.mo_occ                          #Occupation numbers (#basis,)
     mo_energies = mf.mo_energy                       #Orbital energies (#basis,)
-    Amol        = df.addons.make_auxmol(mol, Abasis) #Auxiliary basis set generated molecular structure
-    
+    if DF is not None:
+        Amol    = df.addons.make_auxmol(mol, DF)     #Auxiliary basis set generated molecular structure
+    else:
+        Amol    = None
+        
     #Checking the grids input:
     if isinstance(grids,int): #Specified grid level
         if grids < 1 or grids > 10: #Check for grid level integer value
@@ -47,7 +49,7 @@ def ec_mp2_args(mf,mol,Abasis,grids=3):
                     coords=grid.coords
                     weights=grid.weights
                       
-            elif isinstance(mf,scf.hf.RHF) or isinstance(mf,scf.hf.UHF): 
+            elif isinstance(mf,scf.hf.RHF) or isinstance(mf,scf.uhf.UHF): 
                 #SCF.RHF/UHF class object requires user defined generated dft grid
                 grid = dft.Grids(mol)
                 grid.level = grids
@@ -59,8 +61,8 @@ def ec_mp2_args(mf,mol,Abasis,grids=3):
                 quit()
     elif isinstance(grids,np.ndarray) and grids.shape[1]==3: #grids is a user specified 3D grid
         coords = grids
-        weights_value = abs(coords) #Uniform random weights
-        weights =  np.full(coords.shape, weights_value)
+        weights_value = 1.0 #Uniform grid weights
+        weights =  np.ones(coords.shape[0]) * weights_value
         
     else: #Wrong grids specification
         print(''' 'grids' needs to be either an integer for the grid level or a user defined 3D grid. ''')
@@ -72,26 +74,25 @@ def ec_mp2_args(mf,mol,Abasis,grids=3):
     return args
     
 #Extracting optional kwargs to a list
-def ec_mp2_kwargs(batch_size=0,DF=True,verbose=False,optimal_contract=False,
-    max_num_array=None,frozen_core=False,spinorb=False,num_core='auto',kappa='inf'):
+def ec_mp2_kwargs(batch_size=0,kappa='inf',optimal_contract=0,frozen_core=0,verbose=False):
     '''Extracting the optional arguments for the ec_mp2 class function. Make sure to use * to unpack.
     
     Input:
-    batch_size = 0           : Grid batch size to run the evaluation on, 0 is for no parallelization
-    DF = True                : Density fitting option
+    batch_size = 0           : Batch size to run the evaluation on, 0 is for no parallelization
+    kappa = 'inf'            : Laplace transform regularization parameter for the doubles amplitudes,
+                               'inf' for no regularization (original MP2 expression)
+    optimal_contract = 0     : Optimized contraction algorithm for the opt_einsum summation path
+                               (0 for no opt_einsum, else positive integer of elements in a temporary array 
+                               for the optimal contraction path).
+    frozen_core = 0          : Frozen core orbital option (0 for no frozen core, 'auto' selects core orbitals
+                               automatically, else positive integer below number of orbitals)
+                               ('inf' for no regularization, else positive integer)
     verbose = False          : Additional printings of time and memory statements
-    optimal_contract = False : Optimized contraction algorithm for the opt_einsum summation path
-    max_num_array = None     : Maximum number of elements in a temporary array for the optimal contraction path, requires a postive integer.
-    frozen_core = False      : Frozen core orbital option
-    spinorb = False          : Specification of the spin orbital usage of frozen core orbitals, False for R/U is fine
-    num_core = 'auto'        : Amount of frozen orbitals, 'auto' selects the core ones.
-    kappa = 'inf'            : Laplace transform regularization parameter for the doubles amplitudes, 'inf' for no regularization (original MP2 expression)
-
+    
     Output:
     kwargs                   : List of optional arguments
-                               0:batch_size, 1:DF, 2:verbose, 3:optimal_contract,
-                               4:max_num_array, 5:frozen_core, 6:spinorb, 7:num_core, 8:kappa'''
+                               0:batch_size, 1:kappa, 2:optimal_contract, 3:frozen_core, 4:verbose'''
     
-    kwargs = [batch_size,DF,verbose,optimal_contract,max_num_array,frozen_core,spinorb,num_core,kappa]
+    kwargs = [batch_size,kappa,optimal_contract,frozen_core,verbose]
     
     return kwargs

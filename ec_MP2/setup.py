@@ -15,8 +15,7 @@ setup(
     url=URL,
     licence='GNU',
     author=AUTHOR,
-    author_email=AUTHOR_EMAIL,
-    version="0.4", 
+    author_email=AUTHOR_EMAIL, 
     
     packages=find_packages(exclude=['*Examples*','*build*','*ec_MP2.egg-info*']), #Exclude directories
     install_requires=[
