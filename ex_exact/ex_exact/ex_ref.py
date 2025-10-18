@@ -1,10 +1,14 @@
-'''Functionalities to evaluate the reference exchange energy from a scf calculation'''
+'''Functionalities to evaluate the reference exchange energy from a scf calculation
+
+Version: 24.11.2023
+Author: Elias Polak
+'''
 
 import opt_einsum as oe
 import numpy as np 
 
 #Exact exchange energy evaluation
-def ex_ref_eval(mf):
+def ex_ref(mf):
     '''Exact evaluation of the exchange energy directly from the density matrix.
     
     Input: 
@@ -13,9 +17,15 @@ def ex_ref_eval(mf):
     Output:
     Ex  : Exchange energy value '''
     
-    dm = mf.make_rdm1()                     #Density matrix (#basis,#basis)
-    
-    Ex =-1/4*oe.contract('ij,ij->',dm,mf.get_k())
+    dm = mf.make_rdm1()                     #Density matrix
+
+    #Check for open or closed shell:
+    if len(dm.shape)==3: #Open-shell
+        Ex_alpha =-1/2*oe.contract('ij,ij->',dm[0],mf.get_k()[0])
+        Ex_beta = -1/2*oe.contract('ij,ij->',dm[1],mf.get_k()[1])
+        Ex = Ex_alpha + Ex_beta
+    else: #closed-shell
+        Ex=-1/4*oe.contract('ij,ij->',dm,mf.get_k())
     
     return Ex
 

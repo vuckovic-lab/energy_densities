@@ -1,5 +1,5 @@
 '''Python scripts to extract and collect fixed and optional
-arguments for the exact exchange based energy density evaluation '''
+arguments for the exact exchange energy density evaluation '''
 
 
 from pyscf import dft, scf, df
@@ -7,8 +7,8 @@ import numpy as np
 
 
 #Extracting necessary input args to a list
-def ex_args(mf,mol,Abasis,grids=3):
-    '''Extracts the input arguments from a SCF kernel calculations for ex_eval function. 
+def ex_args(mf,mol,grids=3,DF=None):
+    '''Extracts the input arguments from a SCF kernel calculations for the generator. 
     Also creates or reads optionally a 3D mesh grid and adds artificial uniform weights.
     Make sure to use * to unpack.
     
@@ -17,6 +17,7 @@ def ex_args(mf,mol,Abasis,grids=3):
     mol          : GTO molecular structure
     Abasis       : String specifying the auxiliary basis set
     grids=3      : pyscf.dft generated grid with a specified grid level or a user defined 3D grid.
+    DF=None      : Density fitting string specifying the auxiliary basis set (None for no density fitting)
     
     Output:
     args    : List of output objects, which are needed for the ec_mp2 functions
@@ -24,8 +25,11 @@ def ex_args(mf,mol,Abasis,grids=3):
     
     
     dm          = mf.make_rdm1()                     #Density matrix (#basis,#basis)
-    Amol        = df.addons.make_auxmol(mol, Abasis) #Auxiliary basis set generated molecular structure
-    
+    if DF is not None:
+        Amol    = df.addons.make_auxmol(mol, DF)     #Auxiliary basis set generated molecular structure
+    else:
+        Amol    = None
+        
     #Checking the grids input:
     if isinstance(grids,int): #Specified grid level
         if grids < 1 or grids > 10: #Check for grid level integer value
@@ -55,7 +59,8 @@ def ex_args(mf,mol,Abasis,grids=3):
                 quit()
     elif isinstance(grids,np.ndarray) and grids.shape[1]==3: #grids is a user specified 3D grid
         coords = grids
-        weights = abs(coords) #Uniform random weights
+        weights_value = 1.0 #Uniform grid weights
+        weights =  np.ones(coords.shape[0]) * weights_value
     else: #Wrong grids specification
         print(''' 'grids' needs to be either an integer for the grid level or a user defined 3D grid. ''')
         quit()
@@ -66,18 +71,21 @@ def ex_args(mf,mol,Abasis,grids=3):
     return args
     
 #Extracting optional kwargs to a list
-def ex_kwargs(batch_size=0,DF=True,verbose=False):
-    '''Extracting the optional arguments for the ex_eval class function. Make sure to use * to unpack.
+def ex_kwargs(batch_size=0,optimal_contract=0,verbose=False):
+    '''Collects the optional arguments for the generator. Make sure to use * to unpack.
     
     Input:
     batch_size = 0           : Batch size to run the evaluation on, 0 is for no parallelization
     DF = True                : Density fitting option
+    optimal_contract=0       : Optimized contraction algorithm for the opt_einsum summation path
+                               (0 for no opt_einsum, else positive integer of elements in a temporary array 
+                               for the optimal contraction path). 
     verbose = False          : Additional printings of time and memory statements
     
     Output:
     kwargs                   : List of optional arguments
                                0:batch_size, 1:DF, 2:verbose'''
     
-    kwargs = [batch_size,DF,verbose]
+    kwargs = [batch_size,optimal_contract,verbose]
     
     return kwargs

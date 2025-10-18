@@ -16,12 +16,9 @@ setup(
     url=URL,
     author=AUTHOR,
     author_email=AUTHOR_EMAIL,
-    version="0.1", 
     
-    packages=find_packages(exclude=['*Examples*','*build*','*ec_MP2.egg-info*']), #Packages only 
+    packages=find_packages(exclude=['*Examples*','*ec_MP2.egg-info*']),
     install_requires=[
-        # List your package dependencies here
-        # e.g., 'requests >= 2.22.0'
         'build >= 1.0.3',
         'twine >= 4.0.2',
         'setuptools >= 68.0.0',
